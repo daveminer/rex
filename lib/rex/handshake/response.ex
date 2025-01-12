@@ -4,7 +4,10 @@ defmodule Rex.Handshake.Response do
   alias Rex.Util
 
   def validate(response) do
+    # refusal? <<21, 3, 3, 0, 2, 2, 22>>
+    dbg(response)
     %{payload: payload} = Util.plex(response)
+    dbg(payload)
 
     case CBOR.decode(payload) do
       # msgAcceptVersion

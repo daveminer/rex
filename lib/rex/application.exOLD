@@ -4,22 +4,24 @@ defmodule Rex.Application do
   use Application
 
   @impl true
-  def start(_type, _args) do
-    children = [
-      {Rex.ClientStatem, client_opts()}
-    ]
+  def start(_type, args) do
+    # dbg(args)
 
-    opts = [strategy: :one_for_one, name: Rex.Supervisor]
-    Supervisor.start_link(children, opts)
+    # children = [
+    #  {Rex.ClientStatem, client_opts()}
+    # ]
+
+    # opts = [strategy: :one_for_one, name: Rex.Supervisor]
+    # Supervisor.start_link(children, opts)
+    {:ok, pid()}
   end
 
-  # @default_node_socket_path "/tmp/cardano-node.socket"
-
   defp client_opts do
+    dbg("CLIENT_OPTS")
     network = System.get_env("CARDANO_NETWORK", "mainnet") |> String.to_atom()
     path = System.get_env("CARDANO_NODE_PATH", "/tmp/cardano-node.socket")
     port = System.get_env("CARDANO_NODE_PORT", "0") |> String.to_integer()
-    # socket, tcp or tls
+    # socket, tcp or ssl
     type = System.get_env("CARDANO_NODE_TYPE", "socket")
 
     [

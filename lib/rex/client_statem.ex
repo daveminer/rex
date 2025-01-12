@@ -23,7 +23,14 @@ defmodule Rex.ClientStatem do
     :gen_statem.call(pid, {:request, query_name})
   end
 
+  @spec start_link([{:network, any()} | {:path, any()} | {:port, any()} | {:type, any()}, ...]) ::
+          :ignore | {:error, any()} | {:ok, pid()}
   def start_link(network: network, path: path, port: port, type: type) do
+    dbg(network)
+    dbg(path)
+    dbg(port)
+    dbg(type)
+
     data = %__MODULE__{
       client: tcp_lib(type),
       path: maybe_local_path(path, type),
@@ -89,6 +96,8 @@ defmodule Rex.ClientStatem do
         :establish,
         %__MODULE__{client: client, socket: socket, network: network} = data
       ) do
+    dbg("CONNECTED")
+
     :ok =
       client.send(
         socket,
@@ -97,6 +106,14 @@ defmodule Rex.ClientStatem do
 
     case client.recv(socket, 0, 5_000) do
       {:ok, full_response} ->
+        dbg(full_response)
+        # <<21, 3, 3, 0, 2, 2, 22>> TLS error?
+        # Record type: 21 (0x15) = Alert
+        # TLS version: 3, 3 (0x0303) = TLS 1.2
+        # Record length: 0, 2 (0x0002) = 2 bytes in the Alert payload
+        # Alert payload: 2, 22 (0x02, 0x16)
+        # Alert level: 2 (0x02) = Fatal
+        # Alert description: 22 (0x16) = record_overflow
         {:ok, _handshake_response} = Handshake.Response.validate(full_response)
 
         actions = [{:next_event, :internal, :acquire_agency}]
@@ -114,8 +131,20 @@ defmodule Rex.ClientStatem do
         %__MODULE__{client: client, socket: socket} = data
       ) do
     :ok = client.send(socket, Messages.msg_acquire())
-    {:ok, _acquire_response} = client.recv(socket, 0, 5_000)
-    {:next_state, :established_has_agency, data}
+
+    case client.recv(socket, 0, 5_000) do
+      {:ok, acquire_response} ->
+        Logger.debug("Received acquire response: #{inspect(acquire_response)}")
+        actions = [{:next_event, :info, data}]
+        {:next_state, :established_has_agency, data, actions}
+
+      {:error, reason} ->
+        Logger.error("Error receiving acquire response: #{inspect(reason)}")
+        {:next_state, :disconnected, data}
+    end
+
+    # dbg(data)
+    # {:next_state, :established_has_agency, data}
   end
 
   def established_no_agency(:info, {:tcp_closed, socket}, %__MODULE__{socket: socket} = data) do
@@ -125,29 +154,64 @@ defmodule Rex.ClientStatem do
 
   def established_has_agency(
         {:call, from},
-        {:request, :get_current_era},
+        {:request, request},
         %__MODULE__{client: client, socket: socket} = data
       ) do
+    dbg("HAS")
+
     :ok = setopts_lib(client).setopts(socket, active: :once)
-    :ok = client.send(socket, Messages.get_current_era())
+
+    message =
+      case request do
+        :get_current_era ->
+          &Messages.get_current_era/0
+
+        :get_tip ->
+          # &Messages.get_tip/0
+          &Messages.get_current_era/0
+      end
+
+    :ok = client.send(socket, message.())
     data = update_in(data.queue, &:queue.in(from, &1))
+    dbg("KEEP")
     {:keep_state, data}
   end
 
   def established_has_agency(
         :info,
-        {_tcp_or_ssl, socket, bytes},
-        %__MODULE__{socket: socket} = data
+        _socket,
+        # {_tcp_or_ssl, {_socket_type, _conn_socket}, _bytes},
+        %__MODULE__{queue: queue} = data
       ) do
+    dbg(queue)
     {:ok, current_era} = LocalStateQueryResponse.parse_response(bytes)
     {{:value, caller}, data} = get_and_update_in(data.queue, &:queue.out/1)
     # This action issues the response back to the clinet
-    actions = [{:reply, caller, {:ok, current_era}}]
+    # actions = [{:reply, caller, {:ok, nil}}]
+    actions =
+      case get_and_update_in(data.queue, &:queue.out/1) do
+        {{:value, caller}, data} ->
+          [{:reply, caller, {:ok, data}}]
+
+        {:empty, _data} ->
+          []
+      end
+
+    dbg(actions)
+    # actions = [{:reply, caller, {:ok, current_era}}]
     {:keep_state, data, actions}
   end
 
   def established_has_agency(:info, {:tcp_closed, socket}, %__MODULE__{socket: socket} = data) do
     Logger.error("Connection closed")
+    {:next_state, :disconnected, data}
+  end
+
+  def established_has_agency(first, second, data) do
+    Logger.error("Default established_has_agency")
+    dbg(first)
+    dbg(second)
+    dbg(data)
     {:next_state, :disconnected, data}
   end
 

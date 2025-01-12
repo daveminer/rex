@@ -5,6 +5,6 @@ defmodule Mix.Tasks.QueryCurrentEra do
 
   def run(_) do
     Application.ensure_all_started(:rex)
-    Rex.get_current_era()
+    dbg(Rex.get_current_era())
   end
 end
